@@ -5,7 +5,7 @@ defmodule RedixSandboxTest do
 
   setup do
     {:ok, redix} = Redix.start_link(@redis_options)
-    key = "redix_sandbox:test:#{System.unique_integer([:positive, :monotonic])}"
+    key = RedixSandbox.TestUtils.unique_key("test")
 
     on_exit(fn ->
       if Process.alive?(redix), do: Redix.command(redix, ["DEL", key])

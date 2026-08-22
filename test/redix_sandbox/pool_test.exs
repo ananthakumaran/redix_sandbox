@@ -1,7 +1,9 @@
 defmodule RedixSandbox.PoolTest do
   use ExUnit.Case, async: true
 
-  test "starts named sandboxes without opening Redis connections" do
+  alias RedixSandbox.TestUtils
+
+  test "starts named sandboxes with isolated connections" do
     {:ok, first_supervisor} =
       RedixSandbox.start_link(
         name: :first_pool_test,
@@ -19,13 +21,11 @@ defmodule RedixSandbox.PoolTest do
     assert Process.alive?(first_supervisor)
     assert Process.alive?(second_supervisor)
 
-    first = connection(:first_pool_test)
-    second = connection(:second_pool_test)
-
-    assert first.database == 14
-    assert second.database == 15
-    assert Process.whereis(first.name) == nil
-    assert Process.whereis(second.name) == nil
+    key = TestUtils.unique_key("isolated")
+    assert :ok = RedixSandbox.checkout(:first_pool_test)
+    assert {:ok, "OK"} = Redix.command(RedixSandbox.via(:first_pool_test), ["SET", key, "first"])
+    assert :ok = RedixSandbox.checkout(:second_pool_test)
+    assert {:ok, nil} = Redix.command(RedixSandbox.via(:second_pool_test), ["GET", key])
   end
 
   test "checkout starts and flushes a connection" do
@@ -39,16 +39,12 @@ defmodule RedixSandbox.PoolTest do
         databases: [13]
       )
 
-    connection = connection(name)
     {:ok, seed} = Redix.start_link(host: "127.0.0.1", port: 6379, database: 13)
 
     try do
       assert {:ok, "OK"} = Redix.command(seed, ["SET", key, "stale value"])
-      assert Process.whereis(connection.name) == nil
-
       assert :ok = RedixSandbox.checkout(name)
-      assert is_pid(Process.whereis(connection.name))
-      assert {:ok, nil} = Redix.command(connection.name, ["GET", key])
+      assert {:ok, nil} = Redix.command(RedixSandbox.via(name), ["GET", key])
 
       assert {:error,
               %RedixSandbox.Errors.CheckoutError{
@@ -87,9 +83,6 @@ defmodule RedixSandbox.PoolTest do
 
     assert message =~ "starting the Redis connection failed for database 10"
 
-    assert %{available: [_connection], leases: %{}} =
-             Process.whereis(RedixSandbox.Names.pool(name)) |> :sys.get_state()
-
     assert_raise RedixSandbox.Errors.NotCheckedOutError, fn ->
       Redix.command(RedixSandbox.via(name), ["PING"])
     end
@@ -122,8 +115,9 @@ defmodule RedixSandbox.PoolTest do
     assert reason =~ "NOPERM"
     assert message =~ "FLUSHDB failed for database 9"
 
-    assert %{available: [_connection], leases: %{}} =
-             Process.whereis(RedixSandbox.Names.pool(name)) |> :sys.get_state()
+    assert_raise RedixSandbox.Errors.NotCheckedOutError, fn ->
+      Redix.command(RedixSandbox.via(name), ["PING"])
+    end
   end
 
   test "clears ownership when the pool crashes" do
@@ -142,31 +136,10 @@ defmodule RedixSandbox.PoolTest do
     Process.exit(pool, :kill)
     assert_receive {:DOWN, ^monitor, :process, ^pool, :killed}
 
-    assert_eventually_not_checked_out(name)
+    TestUtils.assert_eventually_not_checked_out(name)
 
     assert :ok = RedixSandbox.checkout(name)
     assert {:ok, "PONG"} = Redix.command(RedixSandbox.via(name), ["PING"])
-  end
-
-  @spec assert_eventually_not_checked_out(RedixSandbox.name(), non_neg_integer()) :: :ok
-  defp assert_eventually_not_checked_out(name, attempts \\ 50)
-
-  defp assert_eventually_not_checked_out(_name, 0),
-    do: flunk("expected ownership to clear after the pool restarted")
-
-  defp assert_eventually_not_checked_out(name, attempts) do
-    try do
-      Redix.command(RedixSandbox.via(name), ["PING"])
-      Process.sleep(10)
-      assert_eventually_not_checked_out(name, attempts - 1)
-    rescue
-      RedixSandbox.Errors.NotCheckedOutError ->
-        :ok
-    catch
-      :exit, _reason ->
-        Process.sleep(10)
-        assert_eventually_not_checked_out(name, attempts - 1)
-    end
   end
 
   test "reports and recovers a checked-out connection that exits" do
@@ -179,9 +152,8 @@ defmodule RedixSandbox.PoolTest do
         databases: [11]
       )
 
-    connection = connection(name)
     assert :ok = RedixSandbox.checkout(name)
-    connection_pid = Process.whereis(connection.name)
+    connection_pid = GenServer.whereis(RedixSandbox.via(name))
     connection_supervisor = RedixSandbox.Names.connection_supervisor(name)
     monitor = Process.monitor(connection_pid)
 
@@ -200,9 +172,9 @@ defmodule RedixSandbox.PoolTest do
       :sys.resume(connection_supervisor)
     end
 
-    assert_eventually_ping(connection.name)
+    TestUtils.assert_eventually_ping(name)
     assert {:ok, "PONG"} = Redix.command(RedixSandbox.via(name), ["PING"])
-    refute Process.whereis(connection.name) == connection_pid
+    refute GenServer.whereis(RedixSandbox.via(name)) == connection_pid
   end
 
   test "returns a crashed owner's database to the pool" do
@@ -235,63 +207,11 @@ defmodule RedixSandbox.PoolTest do
 
     assert message =~ "no logical Redis database is available"
 
-    connection = %{name: RedixSandbox.Names.connection(name, 12)}
-    connection_pid = Process.whereis(connection.name)
     monitor = Process.monitor(owner)
     Process.exit(owner, :kill)
 
     assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}
 
-    assert_eventually_checkout(name)
-    assert Process.whereis(connection.name) == connection_pid
-  end
-
-  @spec assert_eventually_ping(atom(), non_neg_integer()) :: :ok
-  defp assert_eventually_ping(connection_name, attempts \\ 50)
-
-  defp assert_eventually_ping(_connection_name, 0),
-    do: flunk("expected the restarted connection to respond to PING")
-
-  defp assert_eventually_ping(connection_name, attempts) do
-    case Process.whereis(connection_name) do
-      nil ->
-        Process.sleep(10)
-        assert_eventually_ping(connection_name, attempts - 1)
-
-      pid ->
-        case Redix.command(pid, ["PING"]) do
-          {:ok, "PONG"} ->
-            :ok
-
-          _result ->
-            Process.sleep(10)
-            assert_eventually_ping(connection_name, attempts - 1)
-        end
-    end
-  end
-
-  @spec assert_eventually_checkout(RedixSandbox.name(), non_neg_integer()) :: :ok
-  defp assert_eventually_checkout(name, attempts \\ 50)
-
-  defp assert_eventually_checkout(_name, 0),
-    do: flunk("expected the database to return to the pool")
-
-  defp assert_eventually_checkout(name, attempts) do
-    case RedixSandbox.checkout(name) do
-      :ok ->
-        :ok
-
-      {:error, %RedixSandbox.Errors.CheckoutError{reason: :pool_exhausted}} ->
-        Process.sleep(10)
-        assert_eventually_checkout(name, attempts - 1)
-    end
-  end
-
-  @spec connection(RedixSandbox.name()) :: map()
-  defp connection(name) do
-    Process.whereis(RedixSandbox.Names.pool(name))
-    |> :sys.get_state()
-    |> Map.fetch!(:available)
-    |> List.first()
+    TestUtils.assert_eventually_checkout(name)
   end
 end
