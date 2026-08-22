@@ -1,7 +1,8 @@
 defmodule RedixSandbox.Via do
   @moduledoc false
 
-  alias RedixSandbox.{ConnectionUnavailableError, NotCheckedOutError, Pool}
+  alias RedixSandbox.Errors.{ConnectionUnavailableError, NotCheckedOutError}
+  alias RedixSandbox.Pool
 
   @type name :: {GenServer.server(), RedixSandbox.name()}
 

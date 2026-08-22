@@ -40,7 +40,9 @@ defmodule RedixSandbox.AsyncIsolationTest do
         Redix.command(RedixSandbox.via(:redix), ["PING"])
       end)
 
-    assert {:error, %RedixSandbox.NotCheckedOutError{sandbox: :redix, message: message}} = result
+    assert {:error, %RedixSandbox.Errors.NotCheckedOutError{sandbox: :redix, message: message}} =
+             result
+
     assert message =~ "Call RedixSandbox.checkout(:redix) before using RedixSandbox.via/1"
   end
 

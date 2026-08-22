@@ -51,7 +51,7 @@ defmodule RedixSandbox.PoolTest do
       assert {:ok, nil} = Redix.command(connection.name, ["GET", key])
 
       assert {:error,
-              %RedixSandbox.CheckoutError{
+              %RedixSandbox.Errors.CheckoutError{
                 sandbox: ^name,
                 database: nil,
                 operation: :checkout,
@@ -77,7 +77,7 @@ defmodule RedixSandbox.PoolTest do
       )
 
     assert {:error,
-            %RedixSandbox.CheckoutError{
+            %RedixSandbox.Errors.CheckoutError{
               sandbox: ^name,
               database: 10,
               operation: :connection_start,
@@ -90,7 +90,7 @@ defmodule RedixSandbox.PoolTest do
     assert %{available: [_connection], leases: %{}} =
              Process.whereis(RedixSandbox.Names.pool(name)) |> :sys.get_state()
 
-    assert_raise RedixSandbox.NotCheckedOutError, fn ->
+    assert_raise RedixSandbox.Errors.NotCheckedOutError, fn ->
       Redix.command(RedixSandbox.via(name), ["PING"])
     end
   end
@@ -111,7 +111,7 @@ defmodule RedixSandbox.PoolTest do
       )
 
     assert {:error,
-            %RedixSandbox.CheckoutError{
+            %RedixSandbox.Errors.CheckoutError{
               sandbox: ^name,
               database: 9,
               operation: :flush,
@@ -160,7 +160,7 @@ defmodule RedixSandbox.PoolTest do
       Process.sleep(10)
       assert_eventually_not_checked_out(name, attempts - 1)
     rescue
-      RedixSandbox.NotCheckedOutError ->
+      RedixSandbox.Errors.NotCheckedOutError ->
         :ok
     catch
       :exit, _reason ->
@@ -191,7 +191,7 @@ defmodule RedixSandbox.PoolTest do
       Process.exit(connection_pid, :kill)
       assert_receive {:DOWN, ^monitor, :process, ^connection_pid, :killed}
 
-      assert_raise RedixSandbox.ConnectionUnavailableError,
+      assert_raise RedixSandbox.Errors.ConnectionUnavailableError,
                    ~r/connection for checked-out sandbox :restarted_connection_pool_test is unavailable/,
                    fn ->
                      Redix.command(RedixSandbox.via(name), ["PING"])
@@ -225,7 +225,7 @@ defmodule RedixSandbox.PoolTest do
     assert_receive {:checked_out, ^owner, :ok}
 
     assert {:error,
-            %RedixSandbox.CheckoutError{
+            %RedixSandbox.Errors.CheckoutError{
               sandbox: ^name,
               database: nil,
               operation: :checkout,
@@ -281,7 +281,7 @@ defmodule RedixSandbox.PoolTest do
       :ok ->
         :ok
 
-      {:error, %RedixSandbox.CheckoutError{reason: :pool_exhausted}} ->
+      {:error, %RedixSandbox.Errors.CheckoutError{reason: :pool_exhausted}} ->
         Process.sleep(10)
         assert_eventually_checkout(name, attempts - 1)
     end

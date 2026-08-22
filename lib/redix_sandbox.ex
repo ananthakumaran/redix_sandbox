@@ -9,7 +9,7 @@ defmodule RedixSandbox do
 
   use Supervisor
 
-  alias RedixSandbox.{CheckoutError, Names}
+  alias RedixSandbox.{Errors.CheckoutError, Names}
 
   @type name :: atom()
 
@@ -58,7 +58,7 @@ defmodule RedixSandbox do
 
   The pool implementation will reserve a logical Redis DB, flush it, and record
   the calling process as its owner before returning `:ok`. Failures return a
-  `RedixSandbox.CheckoutError` with the sandbox, database when applicable, operation, and
+  `RedixSandbox.Errors.CheckoutError` with the sandbox, database when applicable, operation, and
   original reason.
   """
   @spec checkout(name()) :: :ok | {:error, CheckoutError.t()}
