@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-22.04
+    name: OTP ${{ matrix.otp }} / Elixir ${{ matrix.elixir }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - elixir: "1.16.3"
+            otp: "26.2"
+          - elixir: "1.18.4"
+            otp: "27.2"
+          - elixir: "1.20.2"
+            otp: "29"
+            check_format: true
+            check_warnings: true
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Start Redis
+        run: docker compose up -d --wait
+
+      - name: Set up Erlang and Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          otp-version: ${{ matrix.otp }}
+          elixir-version: ${{ matrix.elixir }}
+          version-type: strict
+          install-hex: true
+          install-rebar: true
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Check formatting
+        if: ${{ matrix.check_format }}
+        run: mix format --check-formatted
+
+      - name: Compile with warnings as errors
+        if: ${{ matrix.check_warnings }}
+        run: mix compile --force --warnings-as-errors
+
+      - name: Run tests
+        run: mix test --trace
+
+      - name: Stop Redis
+        if: always()
+        run: docker compose down -v
