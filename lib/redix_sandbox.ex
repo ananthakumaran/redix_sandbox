@@ -9,7 +9,7 @@ defmodule RedixSandbox do
 
   use Supervisor
 
-  alias RedixSandbox.{Errors.CheckoutError, Names}
+  alias RedixSandbox.{Errors.AllowError, Errors.CheckoutError, Names}
 
   @type name :: atom()
 
@@ -79,6 +79,23 @@ defmodule RedixSandbox do
   end
 
   @doc """
+  Allows a process to use the calling owner's checked-out Redis connection.
+
+  The owner must already have checked out the sandbox. The child shares the owner's
+  logical Redis database.
+  """
+  @spec allow(name(), pid(), pid()) :: :ok | {:error, AllowError.t()}
+  def allow(name, owner, child) when is_atom(name) and is_pid(owner) and is_pid(child) do
+    case NimbleOwnership.allow(Names.ownership(name), owner, child, name) do
+      :ok ->
+        :ok
+
+      {:error, reason} ->
+        {:error, allow_error(name, owner, child, reason)}
+    end
+  end
+
+  @doc """
   Returns an OTP `:via` tuple that resolves to the calling process's connection.
 
   Pass this where a `Redix` connection name is accepted, for example:
@@ -88,6 +105,19 @@ defmodule RedixSandbox do
   @spec via(name()) :: {:via, RedixSandbox.Via, {atom(), name()}}
   def via(name) when is_atom(name) do
     {:via, RedixSandbox.Via, {Names.pool(name), name}}
+  end
+
+  @spec allow_error(name(), pid(), pid(), term()) :: AllowError.t()
+  defp allow_error(sandbox, owner, child, reason) do
+    %AllowError{
+      sandbox: sandbox,
+      owner: owner,
+      child: child,
+      reason: reason,
+      message:
+        "could not allow #{inspect(child)} to use Redis sandbox #{inspect(sandbox)} " <>
+          "through #{inspect(owner)}: #{inspect(reason)}"
+    }
   end
 
   @spec checkout_error(

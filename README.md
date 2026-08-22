@@ -15,7 +15,7 @@ Add the dependency to the `deps` list in `mix.exs`:
 
 ## Usage
 
-Suppose your Redix application starts a named process:
+Suppose your application starts a named process:
 ```elixir
 # config/config.exs
 config :my_app, redis_connection: :redis
@@ -59,6 +59,8 @@ ExUnit.start()
 Check out the sandbox for each test:
 
 ```elixir
+use ExUnit.Case, async: true
+
 setup do
   :ok = RedixSandbox.checkout(:redis)
 end

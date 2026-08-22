@@ -13,17 +13,35 @@ defmodule RedixSandbox.TestUtils do
     do: flunk("expected ownership to clear after the pool restarted")
 
   def assert_eventually_not_checked_out(name, attempts) do
+    assert_eventually_not_checked_out_fun(
+      fn -> Redix.command(RedixSandbox.via(name), ["PING"]) end,
+      attempts
+    )
+  end
+
+  @spec assert_eventually_not_checked_out_fun((-> term()), non_neg_integer()) :: :ok
+  def assert_eventually_not_checked_out_fun(fun, attempts \\ 50)
+
+  def assert_eventually_not_checked_out_fun(_fun, 0),
+    do: flunk("expected ownership to clear after the pool restarted")
+
+  def assert_eventually_not_checked_out_fun(fun, attempts) do
     try do
-      Redix.command(RedixSandbox.via(name), ["PING"])
-      Process.sleep(10)
-      assert_eventually_not_checked_out(name, attempts - 1)
+      case fun.() do
+        {:error, %RedixSandbox.Errors.NotCheckedOutError{}} ->
+          :ok
+
+        _result ->
+          Process.sleep(10)
+          assert_eventually_not_checked_out_fun(fun, attempts - 1)
+      end
     rescue
       RedixSandbox.Errors.NotCheckedOutError ->
         :ok
     catch
       :exit, _reason ->
         Process.sleep(10)
-        assert_eventually_not_checked_out(name, attempts - 1)
+        assert_eventually_not_checked_out_fun(fun, attempts - 1)
     end
   end
 

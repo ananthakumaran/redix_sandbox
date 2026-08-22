@@ -10,4 +10,8 @@ defmodule RedixSandbox.Errors do
   defmodule NotCheckedOutError do
     defexception [:message, :sandbox, :callers]
   end
+
+  defmodule AllowError do
+    defexception [:message, :sandbox, :owner, :child, :reason]
+  end
 end
