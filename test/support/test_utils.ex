@@ -14,7 +14,7 @@ defmodule RedixSandbox.TestUtils do
 
   def assert_eventually_not_checked_out(name, attempts) do
     assert_eventually_not_checked_out_fun(
-      fn -> Redix.command(RedixSandbox.via(name), ["PING"]) end,
+      fn -> Redix.command({:via, RedixSandbox, name}, ["PING"]) end,
       attempts
     )
   end
@@ -53,7 +53,7 @@ defmodule RedixSandbox.TestUtils do
 
   def assert_eventually_ping(sandbox, attempts) do
     try do
-      case Redix.command(RedixSandbox.via(sandbox), ["PING"]) do
+      case Redix.command({:via, RedixSandbox, sandbox}, ["PING"]) do
         {:ok, "PONG"} ->
           :ok
 

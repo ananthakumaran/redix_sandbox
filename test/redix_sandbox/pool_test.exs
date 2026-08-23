@@ -23,9 +23,12 @@ defmodule RedixSandbox.PoolTest do
 
     key = TestUtils.unique_key("isolated")
     assert :ok = RedixSandbox.checkout(:first_pool_test)
-    assert {:ok, "OK"} = Redix.command(RedixSandbox.via(:first_pool_test), ["SET", key, "first"])
+
+    assert {:ok, "OK"} =
+             Redix.command({:via, RedixSandbox, :first_pool_test}, ["SET", key, "first"])
+
     assert :ok = RedixSandbox.checkout(:second_pool_test)
-    assert {:ok, nil} = Redix.command(RedixSandbox.via(:second_pool_test), ["GET", key])
+    assert {:ok, nil} = Redix.command({:via, RedixSandbox, :second_pool_test}, ["GET", key])
   end
 
   test "checkout starts and flushes a connection" do
@@ -44,7 +47,7 @@ defmodule RedixSandbox.PoolTest do
     try do
       assert {:ok, "OK"} = Redix.command(seed, ["SET", key, "stale value"])
       assert :ok = RedixSandbox.checkout(name)
-      assert {:ok, nil} = Redix.command(RedixSandbox.via(name), ["GET", key])
+      assert {:ok, nil} = Redix.command({:via, RedixSandbox, name}, ["GET", key])
 
       assert {:error,
               %RedixSandbox.Errors.CheckoutError{
@@ -84,7 +87,7 @@ defmodule RedixSandbox.PoolTest do
     assert message =~ "starting the Redis connection failed for database 10"
 
     assert_raise RedixSandbox.Errors.NotCheckedOutError, fn ->
-      Redix.command(RedixSandbox.via(name), ["PING"])
+      Redix.command({:via, RedixSandbox, name}, ["PING"])
     end
   end
 
@@ -116,7 +119,7 @@ defmodule RedixSandbox.PoolTest do
     assert message =~ "FLUSHDB failed for database 9"
 
     assert_raise RedixSandbox.Errors.NotCheckedOutError, fn ->
-      Redix.command(RedixSandbox.via(name), ["PING"])
+      Redix.command({:via, RedixSandbox, name}, ["PING"])
     end
   end
 
@@ -139,7 +142,7 @@ defmodule RedixSandbox.PoolTest do
     TestUtils.assert_eventually_not_checked_out(name)
 
     assert :ok = RedixSandbox.checkout(name)
-    assert {:ok, "PONG"} = Redix.command(RedixSandbox.via(name), ["PING"])
+    assert {:ok, "PONG"} = Redix.command({:via, RedixSandbox, name}, ["PING"])
   end
 
   test "reports and recovers a checked-out connection that exits" do
@@ -153,7 +156,7 @@ defmodule RedixSandbox.PoolTest do
       )
 
     assert :ok = RedixSandbox.checkout(name)
-    connection_pid = GenServer.whereis(RedixSandbox.via(name))
+    connection_pid = GenServer.whereis({:via, RedixSandbox, name})
     connection_supervisor = RedixSandbox.Names.connection_supervisor(name)
     monitor = Process.monitor(connection_pid)
 
@@ -166,15 +169,15 @@ defmodule RedixSandbox.PoolTest do
       assert_raise RedixSandbox.Errors.ConnectionUnavailableError,
                    ~r/connection for checked-out sandbox :restarted_connection_pool_test is unavailable/,
                    fn ->
-                     Redix.command(RedixSandbox.via(name), ["PING"])
+                     Redix.command({:via, RedixSandbox, name}, ["PING"])
                    end
     after
       :sys.resume(connection_supervisor)
     end
 
     TestUtils.assert_eventually_ping(name)
-    assert {:ok, "PONG"} = Redix.command(RedixSandbox.via(name), ["PING"])
-    refute GenServer.whereis(RedixSandbox.via(name)) == connection_pid
+    assert {:ok, "PONG"} = Redix.command({:via, RedixSandbox, name}, ["PING"])
+    refute GenServer.whereis({:via, RedixSandbox, name}) == connection_pid
   end
 
   test "returns a crashed owner's database to the pool" do

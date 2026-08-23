@@ -6,9 +6,9 @@ defmodule RedixSandbox.AsyncIsolationTest do
   test "concurrent owners only see their own values" do
     results =
       run_concurrently(fn value, barrier ->
-        set_result = Redix.command(RedixSandbox.via(:redix), ["SET", @key, value])
+        set_result = Redix.command({:via, RedixSandbox, :redix}, ["SET", @key, value])
         :ok = barrier.()
-        {set_result, Redix.command(RedixSandbox.via(:redix), ["GET", @key])}
+        {set_result, Redix.command({:via, RedixSandbox, :redix}, ["GET", @key])}
       end)
 
     assert_isolated_results(results)
@@ -19,9 +19,9 @@ defmodule RedixSandbox.AsyncIsolationTest do
       run_concurrently(fn value, barrier ->
         task =
           Task.async(fn ->
-            set_result = Redix.command(RedixSandbox.via(:redix), ["SET", @key, value])
+            set_result = Redix.command({:via, RedixSandbox, :redix}, ["SET", @key, value])
             :ok = barrier.()
-            {set_result, Redix.command(RedixSandbox.via(:redix), ["GET", @key])}
+            {set_result, Redix.command({:via, RedixSandbox, :redix}, ["GET", @key])}
           end)
 
         Task.await(task)
@@ -33,17 +33,18 @@ defmodule RedixSandbox.AsyncIsolationTest do
   test "does not resolve a checked-out connection for a detached executor" do
     assert :ok = RedixSandbox.checkout(:redix)
 
-    assert {:ok, "PONG"} = Redix.command(RedixSandbox.via(:redix), ["PING"])
+    assert {:ok, "PONG"} = Redix.command({:via, RedixSandbox, :redix}, ["PING"])
 
     result =
       RedixSandbox.DetachedExecutor.call(fn ->
-        Redix.command(RedixSandbox.via(:redix), ["PING"])
+        Redix.command({:via, RedixSandbox, :redix}, ["PING"])
       end)
 
     assert {:error, %RedixSandbox.Errors.NotCheckedOutError{sandbox: :redix, message: message}} =
              result
 
-    assert message =~ "Call RedixSandbox.checkout(:redix) before using RedixSandbox.via/1"
+    assert message =~
+             "Call RedixSandbox.checkout(:redix) before using the {:via, RedixSandbox, :redix} tuple"
   end
 
   @spec assert_isolated_results([{String.t(), term()}]) :: :ok

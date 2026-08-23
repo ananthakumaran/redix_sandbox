@@ -10,7 +10,7 @@ defmodule RedixSandbox.AllowTest do
 
     assert {:error, %NotCheckedOutError{sandbox: :redix}} =
              RedixSandbox.DetachedExecutor.call(fn ->
-               Redix.command(RedixSandbox.via(:redix), ["PING"])
+               Redix.command({:via, RedixSandbox, :redix}, ["PING"])
              end)
 
     assert :ok =
@@ -20,7 +20,7 @@ defmodule RedixSandbox.AllowTest do
 
     assert {:ok, "PONG"} =
              RedixSandbox.DetachedExecutor.call(fn ->
-               Redix.command(RedixSandbox.via(:redix), ["PING"])
+               Redix.command({:via, RedixSandbox, :redix}, ["PING"])
              end)
   end
 
@@ -65,7 +65,7 @@ defmodule RedixSandbox.AllowTest do
 
     assert {:ok, "PONG"} =
              RedixSandbox.DetachedExecutor.call(fn ->
-               Redix.command(RedixSandbox.via(:redix), ["PING"])
+               Redix.command({:via, RedixSandbox, :redix}, ["PING"])
              end)
 
     send(owner, :stop)
@@ -73,7 +73,7 @@ defmodule RedixSandbox.AllowTest do
 
     assert TestUtils.assert_eventually_not_checked_out_fun(fn ->
              RedixSandbox.DetachedExecutor.call(fn ->
-               Redix.command(RedixSandbox.via(:redix), ["PING"])
+               Redix.command({:via, RedixSandbox, :redix}, ["PING"])
              end)
            end)
 

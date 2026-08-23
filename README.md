@@ -36,11 +36,12 @@ def set(key, value), do: Redix.command(@redis, ["SET", key, value])
 def get(key), do: Redix.command(@redis, ["GET", key])
 ```
 
-To use RedixSandbox, change the connection in the test environment:
+To use RedixSandbox, change the connection in the test environment. The `:via` tuple can be
+written directly in configuration, without calling into the library while the config is evaluated:
 
 ```elixir
 # config/test.exs
-config :my_app, :redis_connection, RedixSandbox.via(:redis)
+config :my_app, :redis_connection, {:via, RedixSandbox, :redis}
 ```
 
 Then start a named sandbox in `test/test_helper.exs`:
@@ -73,7 +74,8 @@ configuration and continues to call `Redix.command/2`.
 
 `Task.async/1` automatically inherits its parent test's checkout. Other processes, such as
 workers started under a supervisor or detached executors, may not be in the owner's caller
-chain. Those processes cannot resolve `RedixSandbox.via/1` unless they are explicitly allowed.
+chain. Those processes cannot resolve a `{:via, RedixSandbox, :redis}` tuple unless they are explicitly
+allowed.
 
 Allow a process to use the owner's checked-out connection:
 
@@ -103,7 +105,7 @@ end
 ```
 
 In shared mode, every process resolves the shared owner's connection through
-`RedixSandbox.via/1`. The owner must already have checked out the sandbox, and it must be the
+`{:via, RedixSandbox, :redis}` tuple. The owner must already have checked out the sandbox, and it must be the
 sandbox's only active checkout. Restore private mode when needed:
 
 ```elixir

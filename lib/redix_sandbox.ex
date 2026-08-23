@@ -3,13 +3,14 @@ defmodule RedixSandbox do
   Process-scoped Redis connections for concurrent tests.
 
   Start a named sandbox with `start_link/1`, then check out that sandbox in each
-  test with `checkout/1`. Redis commands use the `:via` tuple from `via/1` to
+  test with `checkout/1`. Redis commands use the `{:via, RedixSandbox, name}` tuple to
   resolve to the calling test's connection.
   """
 
   use Supervisor
 
   alias RedixSandbox.{Errors.AllowError, Errors.CheckoutError, Errors.ModeError, Names}
+  alias RedixSandbox.Errors.{ConnectionUnavailableError, NotCheckedOutError}
 
   @type name :: atom()
   @type mode :: :private | {:shared, pid()}
@@ -115,16 +116,63 @@ defmodule RedixSandbox do
     end
   end
 
-  @doc """
-  Returns an OTP `:via` tuple that resolves to the calling process's connection.
+  @spec whereis_name(name()) :: pid()
+  def whereis_name(sandbox) when is_atom(sandbox) do
+    callers = caller_pids()
 
-  Pass this where a `Redix` connection name is accepted, for example:
+    case RedixSandbox.Pool.connection_for(Names.pool(sandbox), callers) do
+      {:ok, connection} ->
+        connection
 
-      Redix.command(RedixSandbox.via(:redix), ["PING"])
-  """
-  @spec via(name()) :: {:via, RedixSandbox.Via, {atom(), name()}}
-  def via(name) when is_atom(name) do
-    {:via, RedixSandbox.Via, {Names.pool(name), name}}
+      {:error, :not_checked_out} ->
+        raise NotCheckedOutError,
+          sandbox: sandbox,
+          callers: callers,
+          message:
+            "no checked-out Redis connection for sandbox #{inspect(sandbox)} in process " <>
+              "#{inspect(self())} or its callers #{inspect(callers)}. " <>
+              "Call RedixSandbox.checkout(#{inspect(sandbox)}) before using the " <>
+              "{:via, RedixSandbox, #{inspect(sandbox)}} tuple"
+
+      {:error, :connection_unavailable} ->
+        raise ConnectionUnavailableError,
+          sandbox: sandbox,
+          message:
+            "the Redis connection for checked-out sandbox #{inspect(sandbox)} is unavailable. " <>
+              "Retry the command after the connection restarts"
+    end
+  end
+
+  @spec register_name(name(), pid()) :: :no
+  def register_name(_name, _pid), do: :no
+
+  @spec unregister_name(name()) :: :ok
+  def unregister_name(_name), do: :ok
+
+  @spec send(name(), term()) :: term()
+  def send(name, message) do
+    Kernel.send(whereis_name(name), message)
+  end
+
+  @spec caller_pids() :: [pid()]
+  defp caller_pids do
+    case Process.get(:"$callers") do
+      nil -> [self() | recursive_parents(self())]
+      pids when is_list(pids) -> pids
+    end
+  end
+
+  @spec recursive_parents(pid() | :undefined) :: [pid()]
+  defp recursive_parents(:undefined), do: []
+
+  defp recursive_parents(pid) when is_pid(pid) do
+    Process.info(pid, :parent)
+  rescue
+    ArgumentError ->
+      []
+  else
+    {:parent, parent_pid} ->
+      [parent_pid | recursive_parents(parent_pid)]
   end
 
   @spec mode_result(name(), mode(), :ok | {:error, term()}) :: :ok | {:error, ModeError.t()}
