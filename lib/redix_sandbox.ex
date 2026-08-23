@@ -9,9 +9,10 @@ defmodule RedixSandbox do
 
   use Supervisor
 
-  alias RedixSandbox.{Errors.AllowError, Errors.CheckoutError, Names}
+  alias RedixSandbox.{Errors.AllowError, Errors.CheckoutError, Errors.ModeError, Names}
 
   @type name :: atom()
+  @type mode :: :private | {:shared, pid()}
 
   @doc """
   Starts a named sandbox.
@@ -79,6 +80,25 @@ defmodule RedixSandbox do
   end
 
   @doc """
+  Changes the ownership mode of a sandbox.
+
+  In shared mode, the owner must already have checked out the sandbox and all callers
+  resolve that owner's Redis connection. Use `:private` to restore process isolation.
+  """
+  @spec mode(name(), mode()) :: :ok | {:error, ModeError.t()}
+  def mode(name, :private) when is_atom(name) do
+    mode_result(name, :private, RedixSandbox.Pool.mode(Names.pool(name), :private))
+  end
+
+  def mode(name, {:shared, owner}) when is_atom(name) and is_pid(owner) do
+    mode_result(
+      name,
+      {:shared, owner},
+      RedixSandbox.Pool.mode(Names.pool(name), {:shared, owner})
+    )
+  end
+
+  @doc """
   Allows a process to use the calling owner's checked-out Redis connection.
 
   The owner must already have checked out the sandbox. The child shares the owner's
@@ -105,6 +125,23 @@ defmodule RedixSandbox do
   @spec via(name()) :: {:via, RedixSandbox.Via, {atom(), name()}}
   def via(name) when is_atom(name) do
     {:via, RedixSandbox.Via, {Names.pool(name), name}}
+  end
+
+  @spec mode_result(name(), mode(), :ok | {:error, term()}) :: :ok | {:error, ModeError.t()}
+  defp mode_result(_sandbox, _mode, :ok), do: :ok
+
+  defp mode_result(sandbox, mode, {:error, reason}),
+    do: {:error, mode_error(sandbox, mode, reason)}
+
+  @spec mode_error(name(), mode(), term()) :: ModeError.t()
+  defp mode_error(sandbox, mode, reason) do
+    %ModeError{
+      sandbox: sandbox,
+      mode: mode,
+      reason: reason,
+      message:
+        "could not set Redis sandbox #{inspect(sandbox)} to mode #{inspect(mode)}: #{inspect(reason)}"
+    }
   end
 
   @spec allow_error(name(), pid(), pid(), term()) :: AllowError.t()
@@ -151,6 +188,11 @@ defmodule RedixSandbox do
   @spec checkout_reason(term()) :: String.t()
   defp checkout_reason(:already_checked_out), do: "the calling process already has a connection"
   defp checkout_reason(:pool_exhausted), do: "no logical Redis database is available"
+  defp checkout_reason(:shared_mode), do: "the sandbox is in shared mode"
+
+  defp checkout_reason(:multiple_checkouts),
+    do: "shared mode requires exactly one checked-out connection"
+
   defp checkout_reason(%{__exception__: true} = reason), do: Exception.message(reason)
   defp checkout_reason(reason), do: inspect(reason)
 end

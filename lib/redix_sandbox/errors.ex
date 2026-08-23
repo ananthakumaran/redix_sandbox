@@ -14,4 +14,8 @@ defmodule RedixSandbox.Errors do
   defmodule AllowError do
     defexception [:message, :sandbox, :owner, :child, :reason]
   end
+
+  defmodule ModeError do
+    defexception [:message, :sandbox, :mode, :reason]
+  end
 end

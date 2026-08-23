@@ -11,6 +11,7 @@ defmodule RedixSandbox.Pool do
   @type ownership :: atom()
   @type connection_supervisor :: atom()
   @type lease :: %{connection: connection(), monitor: reference()}
+  @type mode :: :private | {:shared, pid()}
   @type state :: %__MODULE__{
           sandbox: sandbox(),
           ownership: ownership(),
@@ -18,7 +19,8 @@ defmodule RedixSandbox.Pool do
           connection_options: keyword(),
           available: [connection()],
           leases: %{pid() => lease()},
-          monitors: %{reference() => pid()}
+          monitors: %{reference() => pid()},
+          mode: mode()
         }
 
   defstruct sandbox: nil,
@@ -27,7 +29,8 @@ defmodule RedixSandbox.Pool do
             connection_options: [],
             available: [],
             leases: %{},
-            monitors: %{}
+            monitors: %{},
+            mode: :private
 
   @spec start_link(keyword()) :: GenServer.on_start()
   def start_link(options \\ []) when is_list(options) do
@@ -38,6 +41,15 @@ defmodule RedixSandbox.Pool do
   @spec checkout(GenServer.server(), pid()) :: :ok | {:error, term()}
   def checkout(pool, owner) when is_pid(owner) do
     GenServer.call(pool, {:checkout, owner})
+  end
+
+  @spec mode(GenServer.server(), mode()) :: :ok | {:error, term()}
+  def mode(pool, :private) do
+    GenServer.call(pool, {:mode, :private})
+  end
+
+  def mode(pool, {:shared, owner}) when is_pid(owner) do
+    GenServer.call(pool, {:mode, {:shared, owner}})
   end
 
   @type connection_result ::
@@ -62,8 +74,11 @@ defmodule RedixSandbox.Pool do
   end
 
   @impl true
-  @spec handle_call({:checkout, pid()} | {:connection_for, [pid()]}, GenServer.from(), state()) ::
-          {:reply, :ok | {:error, term()} | connection_result(), state()}
+  @spec handle_call(
+          {:checkout, pid()} | {:connection_for, [pid()]} | {:mode, mode()},
+          GenServer.from(),
+          state()
+        ) :: {:reply, :ok | {:error, term()} | connection_result(), state()}
   def handle_call({:connection_for, callers}, _from, state) do
     connection =
       case NimbleOwnership.fetch_owner(state.ownership, callers, state.sandbox) do
@@ -84,6 +99,36 @@ defmodule RedixSandbox.Pool do
       end
 
     {:reply, connection, state}
+  end
+
+  def handle_call({:mode, :private}, _from, state) do
+    :ok = NimbleOwnership.set_mode_to_private(state.ownership)
+    {:reply, :ok, %{state | mode: :private}}
+  end
+
+  def handle_call({:mode, {:shared, owner}}, _from, state) do
+    cond do
+      state.mode == {:shared, owner} ->
+        {:reply, :ok, state}
+
+      state.mode != :private ->
+        {:reply, {:error, :shared_mode}, state}
+
+      not Map.has_key?(state.leases, owner) ->
+        {:reply, {:error, :not_checked_out}, state}
+
+      map_size(state.leases) != 1 ->
+        {:reply, {:error, :multiple_checkouts}, state}
+
+      true ->
+        :ok = NimbleOwnership.set_mode_to_shared(state.ownership, owner)
+        {:reply, :ok, %{state | mode: {:shared, owner}}}
+    end
+  end
+
+  def handle_call({:checkout, owner}, _from, %{mode: {:shared, shared_owner}} = state)
+      when owner != shared_owner do
+    {:reply, {:error, :shared_mode}, state}
   end
 
   def handle_call({:checkout, owner}, _from, %{leases: leases} = state)
@@ -114,7 +159,8 @@ defmodule RedixSandbox.Pool do
           state
           | monitors: monitors,
             leases: leases,
-            available: [lease.connection | state.available]
+            available: [lease.connection | state.available],
+            mode: reset_mode(state.mode, owner)
         }
 
         {:noreply, state}
@@ -123,6 +169,10 @@ defmodule RedixSandbox.Pool do
         {:noreply, state}
     end
   end
+
+  @spec reset_mode(mode(), pid()) :: mode()
+  defp reset_mode({:shared, owner}, owner), do: :private
+  defp reset_mode(mode, _owner), do: mode
 
   @spec checkout_connection(pid(), connection(), state()) :: {:ok, state()} | {:error, term()}
   defp checkout_connection(owner, connection, state) do
