@@ -22,7 +22,7 @@ defmodule RedixSandbox.MixProject do
 
   defp deps do
     [
-      {:nimble_ownership, "~> 1.0"},
+      {:nimble_ownership, "~> 0.3 or ~> 1.0"},
       {:redix, "~> 1.1"}
     ]
   end
