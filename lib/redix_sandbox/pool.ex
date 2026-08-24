@@ -1,7 +1,5 @@
 defmodule RedixSandbox.Pool do
-  @moduledoc """
-  Owns sandbox leases and lazily started Redis connections.
-  """
+  @moduledoc false
 
   use GenServer
 

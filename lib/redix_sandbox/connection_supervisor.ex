@@ -1,4 +1,5 @@
 defmodule RedixSandbox.ConnectionSupervisor do
+  @moduledoc false
   use DynamicSupervisor
 
   @spec start_link(keyword()) :: Supervisor.on_start()

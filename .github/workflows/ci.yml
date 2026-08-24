@@ -51,6 +51,14 @@ jobs:
         if: ${{ matrix.check_warnings }}
         run: mix compile --force --warnings-as-errors
 
+      - name: Build documentation
+        if: ${{ matrix.check_format }}
+        run: mix docs --warnings-as-errors
+
+      - name: Build package
+        if: ${{ matrix.check_format }}
+        run: mix hex.build
+
       - name: Run tests
         run: mix test --trace
 

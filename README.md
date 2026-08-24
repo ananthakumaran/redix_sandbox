@@ -1,50 +1,51 @@
 # RedixSandbox
 
-`RedixSandbox` provides isolated Redix connections for concurrent ExUnit
-tests. Each test gets its own connection to a specific
-[logical database](https://redis.io/docs/latest/commands/select/),
-which is flushed at the start of the test.
+[![CI](https://github.com/ananthakumaran/redix_sandbox/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/ananthakumaran/redix_sandbox/actions/workflows/ci.yml) [![Hex.pm](https://img.shields.io/hexpm/v/redix_sandbox.svg)](https://hex.pm/packages/redix_sandbox) [![Documentation](https://img.shields.io/badge/hexdocs-release-blue.svg)](https://hexdocs.pm/redix_sandbox)
+
+`RedixSandbox` provides isolated, process-scoped Redis connections for
+concurrent [ExUnit](https://hexdocs.pm/ex_unit/ExUnit.html) tests. Each test
+checks out a logical Redis database, which is flushed before use and returned
+to the pool when the owner exits.
 
 ## Installation
 
-Add the dependency to the `deps` list in `mix.exs`:
+Add `redix_sandbox` to the test dependencies in `mix.exs`:
 
 ```elixir
-{:redix_sandbox, "~> 0.1.0", only: :test}
+defp deps do
+  [
+    {:redix_sandbox, "~> 0.1.0", only: :test}
+  ]
+end
 ```
+
+Then fetch the dependency with `mix deps.get`.
 
 ## Usage
 
-Suppose your application starts a named process:
-```elixir
-children = [
-  {Redix,
-   name: :redix,
-   host: "127.0.0.1",
-   port: 6379}
-]
-```
+Suppose application code uses a named Redix connection:
 
 ```elixir
 # config/config.exs
-config :my_app, redis_connection: :redis
+config :my_app, :redis_connection, :redis
 ```
 
 ```elixir
 @redis Application.compile_env!(:my_app, :redis_connection)
+
 def set(key, value), do: Redix.command(@redis, ["SET", key, value])
 def get(key), do: Redix.command(@redis, ["GET", key])
 ```
 
-To use RedixSandbox, change the connection in the test environment. The `:via` tuple can be
-written directly in configuration, without calling into the library while the config is evaluated:
+Use a `:via` tuple in the test environment. The tuple can be configured
+directly, so no library code runs while configuration is evaluated:
 
 ```elixir
 # config/test.exs
 config :my_app, :redis_connection, {:via, RedixSandbox, :redis}
 ```
 
-Then start a named sandbox in `test/test_helper.exs`:
+Start the sandbox once in `test/test_helper.exs`:
 
 ```elixir
 ExUnit.start()
@@ -57,7 +58,9 @@ ExUnit.start()
   )
 ```
 
-Check out the sandbox for each test:
+The `connection` options are passed to `Redix`; `databases` accepts any
+enumerable of Redis logical database numbers. Check out a database in each
+test:
 
 ```elixir
 use ExUnit.Case, async: true
@@ -67,17 +70,14 @@ setup do
 end
 ```
 
-The application code can remain unchanged; it reads the test connection from
-configuration and continues to call `Redix.command/2`.
+Application code can now continue to call `Redix.command/2` without knowing
+that the connection is sandboxed.
 
-## Explicit process allowances
+## Processes outside the caller chain
 
-`Task.async/1` automatically inherits its parent test's checkout. Other processes, such as
-workers started under a supervisor or detached executors, may not be in the owner's caller
-chain. Those processes cannot resolve a `{:via, RedixSandbox, :redis}` tuple unless they are explicitly
-allowed.
-
-Allow a process to use the owner's checked-out connection:
+`Task.async/1` automatically inherits its parent test's checkout. A process
+started under a supervisor, or another detached process, must be explicitly
+allowed to use the owner's connection:
 
 ```elixir
 owner = self()
@@ -87,13 +87,13 @@ owner = self()
 :ok = RedixSandbox.allow(:redis, owner, worker)
 ```
 
-The allowed process shares the owner's logical Redis database; it does not receive a separate
-lease. Allowances are removed automatically when the owner or child exits.
+The allowed process shares the owner's logical database. It does not receive a
+separate lease, and the allowance is removed when the owner or child exits.
 
 ## Shared ownership mode
 
-Shared mode is useful when several processes must use one checked-out connection, but their
-process relationships cannot be expressed with caller tracking or explicit allowances:
+Use shared mode when several unrelated processes must resolve the same
+connection and explicit allowances are not practical:
 
 ```elixir
 use ExUnit.Case, async: false
@@ -104,15 +104,10 @@ setup do
 end
 ```
 
-In shared mode, every process resolves the shared owner's connection through
-`{:via, RedixSandbox, :redis}` tuple. The owner must already have checked out the sandbox, and it must be the
-sandbox's only active checkout. Restore private mode when needed:
+Restore process isolation with `RedixSandbox.mode(:redis, :private)`. Shared
+mode is global to the named sandbox, so it must not be used by concurrent tests
+sharing that sandbox. It also requires exactly one active checkout.
 
-```elixir
-:ok = RedixSandbox.mode(:redis, :private)
-```
+## License
 
-Shared mode cannot be used with `async: true` for tests sharing the same sandbox. The mode is
-global to the named sandbox rather than scoped to one test process, so concurrent tests would
-share one Redis logical database and could observe or overwrite each other's data. Shared mode
-also rejects additional checkouts while it is active.
+This project is released under the [MIT License](LICENSE).
