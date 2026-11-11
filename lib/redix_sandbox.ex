@@ -62,10 +62,13 @@ defmodule RedixSandbox do
   the calling process as its owner before returning `:ok`. Failures return a
   `RedixSandbox.Errors.CheckoutError` with the sandbox, database when applicable, operation, and
   original reason.
+
+  The `:timeout` option applies to each pool call and `FLUSHDB` separately.
+  Accepts milliseconds or `:infinity`; defaults to 5,000 ms.
   """
-  @spec checkout(name()) :: :ok | {:error, CheckoutError.t()}
-  def checkout(name) when is_atom(name) do
-    case RedixSandbox.Pool.checkout(Names.pool(name), self()) do
+  @spec checkout(name(), keyword()) :: :ok | {:error, CheckoutError.t()}
+  def checkout(name, options \\ []) when is_atom(name) and is_list(options) do
+    case RedixSandbox.Pool.checkout(Names.pool(name), self(), options) do
       :ok ->
         :ok
 

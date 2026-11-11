@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/).
 
 ## [0.2.0] - 2026-11-11
 
+### Added
+
+- Configurable checkout timeout via `checkout(name, timeout: milliseconds | :infinity)`,
+  applying to pool calls and `FLUSHDB` while preserving existing defaults when omitted.
+
 ### Fixed
 
 - Run checkout's `FLUSHDB` in the calling process so slow flushes no longer block

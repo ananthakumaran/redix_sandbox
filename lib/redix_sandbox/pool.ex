@@ -36,22 +36,29 @@ defmodule RedixSandbox.Pool do
     GenServer.start_link(__MODULE__, pool_options, genserver_options)
   end
 
-  @spec checkout(GenServer.server(), pid()) :: :ok | {:error, term()}
-  def checkout(pool, owner) when is_pid(owner) do
-    with {:ok, connection} <- GenServer.call(pool, {:checkout, owner}) do
+  @spec checkout(GenServer.server(), pid(), keyword()) :: :ok | {:error, term()}
+  def checkout(pool, owner, options \\ []) when is_pid(owner) do
+    options = Keyword.validate!(options, [:timeout])
+    timeout = Keyword.get(options, :timeout, 5000)
+
+    unless timeout == :infinity or (is_integer(timeout) and timeout >= 0) do
+      raise ArgumentError, ":timeout must be a non-negative integer or :infinity"
+    end
+
+    with {:ok, connection} <- GenServer.call(pool, {:checkout, owner}, timeout) do
       # Redis I/O runs in the caller so a slow flush cannot block the pool.
       try do
-        flush_connection(connection)
+        flush_connection(connection, options)
       catch
         kind, reason ->
-          GenServer.call(pool, {:release, owner})
+          GenServer.call(pool, {:release, owner}, timeout)
           :erlang.raise(kind, reason, __STACKTRACE__)
       else
         :ok ->
           :ok
 
         {:error, _reason} = error ->
-          :ok = GenServer.call(pool, {:release, owner})
+          :ok = GenServer.call(pool, {:release, owner}, timeout)
           error
       end
     end
@@ -236,9 +243,9 @@ defmodule RedixSandbox.Pool do
     end
   end
 
-  @spec flush_connection(connection()) :: :ok | {:error, term()}
-  defp flush_connection(connection) do
-    case Redix.command(connection.name, ["FLUSHDB"]) do
+  @spec flush_connection(connection(), keyword()) :: :ok | {:error, term()}
+  defp flush_connection(connection, options) do
+    case Redix.command(connection.name, ["FLUSHDB"], options) do
       {:ok, "OK"} -> :ok
       {:ok, response} -> {:error, {:unexpected_flush_response, response}}
       {:error, reason} -> {:error, {:flush_failed, connection.database, reason}}
