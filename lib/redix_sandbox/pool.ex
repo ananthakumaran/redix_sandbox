@@ -38,7 +38,23 @@ defmodule RedixSandbox.Pool do
 
   @spec checkout(GenServer.server(), pid()) :: :ok | {:error, term()}
   def checkout(pool, owner) when is_pid(owner) do
-    GenServer.call(pool, {:checkout, owner})
+    with {:ok, connection} <- GenServer.call(pool, {:checkout, owner}) do
+      # Redis I/O runs in the caller so a slow flush cannot block the pool.
+      try do
+        flush_connection(connection)
+      catch
+        kind, reason ->
+          GenServer.call(pool, {:release, owner})
+          :erlang.raise(kind, reason, __STACKTRACE__)
+      else
+        :ok ->
+          :ok
+
+        {:error, _reason} = error ->
+          :ok = GenServer.call(pool, {:release, owner})
+          error
+      end
+    end
   end
 
   @spec mode(GenServer.server(), mode()) :: :ok | {:error, term()}
@@ -73,10 +89,10 @@ defmodule RedixSandbox.Pool do
 
   @impl true
   @spec handle_call(
-          {:checkout, pid()} | {:connection_for, [pid()]} | {:mode, mode()},
+          {:checkout, pid()} | {:release, pid()} | {:connection_for, [pid()]} | {:mode, mode()},
           GenServer.from(),
           state()
-        ) :: {:reply, :ok | {:error, term()} | connection_result(), state()}
+        ) :: {:reply, :ok | {:ok, connection()} | {:error, term()} | connection_result(), state()}
   def handle_call({:connection_for, callers}, _from, state) do
     connection =
       case NimbleOwnership.fetch_owner(state.ownership, callers, state.sandbox) do
@@ -140,31 +156,42 @@ defmodule RedixSandbox.Pool do
 
   def handle_call({:checkout, owner}, _from, %{available: [connection | _]} = state) do
     case checkout_connection(owner, connection, state) do
-      {:ok, state} -> {:reply, :ok, state}
+      {:ok, state} -> {:reply, {:ok, connection}, state}
       {:error, reason} -> {:reply, {:error, reason}, state}
     end
+  end
+
+  def handle_call({:release, owner}, _from, state) do
+    :ok = NimbleOwnership.cleanup_owner(state.ownership, owner)
+    {:reply, :ok, release_owner(owner, state)}
   end
 
   @impl true
   @spec handle_info({:DOWN, reference(), :process, pid(), term()}, state()) ::
           {:noreply, state()}
   def handle_info({:DOWN, reference, :process, owner, _reason}, state) do
-    case Map.pop(state.monitors, reference) do
-      {^owner, monitors} ->
-        {lease, leases} = Map.pop(state.leases, owner)
+    case state.monitors do
+      %{^reference => ^owner} -> {:noreply, release_owner(owner, state)}
+      _ -> {:noreply, state}
+    end
+  end
 
-        state = %{
+  @spec release_owner(pid(), state()) :: state()
+  defp release_owner(owner, state) do
+    case Map.pop(state.leases, owner) do
+      {nil, _leases} ->
+        state
+
+      {lease, leases} ->
+        Process.demonitor(lease.monitor, [:flush])
+
+        %{
           state
-          | monitors: monitors,
-            leases: leases,
+          | leases: leases,
+            monitors: Map.delete(state.monitors, lease.monitor),
             available: [lease.connection | state.available],
             mode: reset_mode(state.mode, owner)
         }
-
-        {:noreply, state}
-
-      {nil, _monitors} ->
-        {:noreply, state}
     end
   end
 
@@ -175,7 +202,6 @@ defmodule RedixSandbox.Pool do
   @spec checkout_connection(pid(), connection(), state()) :: {:ok, state()} | {:error, term()}
   defp checkout_connection(owner, connection, state) do
     with :ok <- ensure_connection(connection, state),
-         :ok <- flush_connection(connection),
          :ok <- register_owner(owner, connection, state) do
       monitor = Process.monitor(owner)
       lease = %{connection: connection, monitor: monitor}

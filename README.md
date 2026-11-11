@@ -14,7 +14,7 @@ Add `redix_sandbox` to the test dependencies in `mix.exs`:
 ```elixir
 defp deps do
   [
-    {:redix_sandbox, "~> 0.1.0", only: :test}
+    {:redix_sandbox, "~> 0.2.0", only: :test}
   ]
 end
 ```

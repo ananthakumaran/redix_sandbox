@@ -91,6 +91,45 @@ defmodule RedixSandbox.PoolTest do
     end
   end
 
+  test "a blocked flush does not block other checkouts or connection lookups" do
+    name = :concurrent_flush_pool_test
+
+    {:ok, _supervisor} =
+      RedixSandbox.start_link(
+        name: name,
+        connection: [host: "127.0.0.1", port: 6379],
+        databases: [7, 8]
+      )
+
+    {:ok, connection} =
+      DynamicSupervisor.start_child(
+        RedixSandbox.Names.connection_supervisor(name),
+        {Redix,
+         host: "127.0.0.1", port: 6379, database: 7, name: RedixSandbox.Names.connection(name, 7)}
+      )
+
+    assert {:ok, "PONG"} = Redix.command(connection, ["PING"])
+    :sys.suspend(connection)
+    checkout = Task.async(fn -> RedixSandbox.checkout(name) end)
+
+    try do
+      pool = RedixSandbox.Names.pool(name)
+      assert_eventually_reserved(pool, checkout.pid)
+      assert Task.yield(checkout, 0) == nil
+
+      assert :ok = RedixSandbox.checkout(name)
+      assert {:ok, pid} = RedixSandbox.Pool.connection_for(pool, [self()])
+      assert pid != connection
+      assert {:ok, "PONG"} = Redix.command(pid, ["PING"])
+
+      :sys.resume(connection)
+      assert Task.await(checkout) == :ok
+    after
+      :sys.resume(connection)
+      Task.shutdown(checkout, :brutal_kill)
+    end
+  end
+
   test "does not lease a connection when FLUSHDB fails" do
     name = :flush_failed_pool_test
 
@@ -117,6 +156,9 @@ defmodule RedixSandbox.PoolTest do
 
     assert reason =~ "NOPERM"
     assert message =~ "FLUSHDB failed for database 9"
+
+    assert {:error, %RedixSandbox.Errors.CheckoutError{operation: :flush}} =
+             RedixSandbox.checkout(name)
 
     assert_raise RedixSandbox.Errors.NotCheckedOutError, fn ->
       Redix.command({:via, RedixSandbox, name}, ["PING"])
@@ -216,5 +258,19 @@ defmodule RedixSandbox.PoolTest do
     assert_receive {:DOWN, ^monitor, :process, ^owner, :killed}
 
     TestUtils.assert_eventually_checkout(name)
+  end
+
+  defp assert_eventually_reserved(pool, owner, attempts \\ 50)
+
+  defp assert_eventually_reserved(_pool, _owner, 0),
+    do: flunk("expected the pool to reserve a database while FLUSHDB is blocked")
+
+  defp assert_eventually_reserved(pool, owner, attempts) do
+    if Map.has_key?(:sys.get_state(pool, 1000).leases, owner) do
+      :ok
+    else
+      Process.sleep(10)
+      assert_eventually_reserved(pool, owner, attempts - 1)
+    end
   end
 end
